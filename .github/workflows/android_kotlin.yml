@@ -1,0 +1,233 @@
+on:
+  workflow_dispatch:
+    inputs:
+      javaVersion:
+      androidEmulatorApiLevel:
+      firebaseToolsVersion:
+      nodeJsVersion:
+      gradleInfoLog:
+        type: boolean
+  pull_request:
+  schedule:
+    - cron: '0 11 * * *' # Run nightly at 11am UTC (3am Pacific, 6am Eastern)
+
+env:
+  FST_JAVA_VERSION: ${{ inputs.javaVersion || '17' }}
+  FST_ANDROID_EMULATOR_API_LEVEL: ${{ inputs.androidEmulatorApiLevel || '34' }}
+  FST_FIREBASE_TOOLS_VERSION: ${{ inputs.firebaseToolsVersion || '13.29.1' }}
+  FST_NODEJS_VERSION: ${{ inputs.nodeJsVersion || '20' }}
+  FST_FIREBASE_TOOLS_DIR: ${{ github.workspace }}/firebase-tools
+  FST_FIREBASE_COMMAND: ${{ github.workspace }}/firebase-tools/node_modules/.bin/firebase
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-code-formatting:
+    continue-on-error: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Create Cache Key Files
+        run: echo "tvak694c6g" >github_actions_cache_key_check_code_formatting.txt
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.FST_JAVA_VERSION }}
+          distribution: temurin
+          cache: gradle
+          cache-dependency-path: |
+            gradle.properties
+            gradle/wrapper/gradle-wrapper.properties
+            github_actions_cache_key_check_code_formatting.txt
+
+      - name: tool versions
+        continue-on-error: true
+        run: |
+          set +e -v
+          uname -a
+          which java
+          java -version
+          which javac
+          javac -version
+          ./gradlew --version
+
+      - name: ./gradlew spotlessCheck
+        id: spotlessCheck
+        run: |
+          echo '---------------------------------------------------------------
+          echo "NOTE: If spotlessCheck finds formatting errors, run ./gradlew spotlessApply to fix them"
+          echo '---------------------------------------------------------------
+
+          set -x
+          ./gradlew \
+            --no-daemon \
+            ${{ (inputs.gradleInfoLog && '--info') || '' }} \
+            spotlessCheck
+
+  unit-test:
+    continue-on-error: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Create Cache Key Files
+        run: |
+          echo "vmmqx54p6b" >github_actions_cache_key_unit_test.txt
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.FST_JAVA_VERSION }}
+          distribution: temurin
+          cache: gradle
+          cache-dependency-path: |
+            gradle.properties
+            gradle/wrapper/gradle-wrapper.properties
+            github_actions_cache_key_unit_test.txt
+
+      - name: tool versions
+        continue-on-error: true
+        run: |
+          set +e -v
+          uname -a
+          which java
+          java -version
+          which javac
+          javac -version
+          ./gradlew --version
+
+      - name: ./gradlew assemble test
+        run: |
+          set -x
+          ./gradlew \
+          --no-daemon \
+          ${{ (inputs.gradleInfoLog && '--info') || '' }} \
+          --profile \
+          assemble assembleAndroidTest assembleUnitTest test
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apks
+          path: app/build/**/*.apk
+          if-no-files-found: warn
+          compression-level: 0
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gradle_build_reports_unit_test
+          path: app/build/reports/
+          if-no-files-found: warn
+          compression-level: 9
+
+  integration-test:
+    continue-on-error: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Enable KVM group permissions for Android Emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: AVD cache
+        uses: actions/cache@v4
+        id: avd-cache
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-cache-dad8gnz4j6-${{ env.FST_ANDROID_EMULATOR_API_LEVEL }}
+
+      - name: Create AVD and generate snapshot for caching
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ env.FST_ANDROID_EMULATOR_API_LEVEL }}
+          arch: x86_64
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: false
+          script: echo "Generated AVD snapshot for caching."
+
+      - name: Create Cache Key Files
+        run: |
+          echo "dad8gnz4j6" >github_actions_cache_key_integration_test.txt
+          echo "${{ env.FST_FIREBASE_TOOLS_VERSION }}" >github_actions_cache_key_integration_test_firebase_tools_version.txt
+
+      - uses: actions/setup-node@v3
+        with:
+          node-version: ${{ env.FST_NODEJS_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: |
+            github_actions_cache_key_integration_test.txt
+            github_actions_cache_key_integration_test_firebase_tools_version.txt
+
+      - name: cache package-lock.json
+        id: package_json_lock
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.FST_FIREBASE_TOOLS_DIR }}/package*.json
+          key: firebase_tools_package_json-nodejs_${{ env.FST_NODEJS_VERSION }}-firebase_tools_${{ env.FST_FIREBASE_TOOLS_VERSION }}
+
+      - name: install firebase-tools from scratch
+        if: steps.package_json_lock.outputs.cache-hit != 'true'
+        run: |
+          set -v
+          mkdir -p ${{ env.FST_FIREBASE_TOOLS_DIR }}
+          cd ${{ env.FST_FIREBASE_TOOLS_DIR }}
+          echo '{}' > package.json
+          npm install --fund=false --audit=false --save --save-exact firebase-tools@${{ env.FST_FIREBASE_TOOLS_VERSION }}
+
+      - name: install firebase-tools from package-lock.json
+        if: steps.package_json_lock.outputs.cache-hit == 'true'
+        run: |
+          cd ${{ env.FST_FIREBASE_TOOLS_DIR }}
+          npm ci --fund=false --audit=false 
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.FST_JAVA_VERSION }}
+          distribution: temurin
+          cache: gradle
+          cache-dependency-path: |
+            gradle.properties
+            gradle/wrapper/gradle-wrapper.properties
+            github_actions_cache_key_integration_test.txt
+
+      - name: tool versions
+        continue-on-error: true
+        run: |
+          set +e -v
+          uname -a
+          which java
+          java -version
+          which javac
+          javac -version
+          which node
+          node --version
+          ${{ env.FST_FIREBASE_COMMAND }} --version
+          ./gradlew --version
+
+      - name: ./gradlew connectedCheck
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ env.FST_ANDROID_EMULATOR_API_LEVEL }}
+          arch: x86_64
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: |
+            set -x && ${{ env.FST_FIREBASE_COMMAND }} emulators:exec --log-verbosity=INFO './gradlew --no-daemon ${{ (inputs.gradleInfoLog && '--info') || '' }} --profile connectedCheck'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gradle_build_reports_integration_test
+          path: app/build/reports/
+          if-no-files-found: warn
+          compression-level: 9
+
