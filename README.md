@@ -1,0 +1,1 @@
+# Issue6601KotlinDataClassCustomClassMapperAndroidTest
