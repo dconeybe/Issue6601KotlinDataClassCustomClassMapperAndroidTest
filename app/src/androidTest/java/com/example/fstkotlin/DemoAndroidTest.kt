@@ -30,6 +30,7 @@ import com.example.fstkotlin.util.kotest.property.arbitrary.visuallyDistinctAlph
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.CollectionReference
 import com.google.firebase.firestore.DocumentReference
+import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.PropertyName
@@ -134,6 +135,47 @@ class ExampleInstrumentedTest {
     data class Pojo(@PropertyName("foobar") @get:ServerTimestamp val myField: Timestamp?)
     verifyRoundTrip("myField", TimestampFieldVerifier.ServerTimestampPopulated()) {
       Pair(Pojo(null), Pojo::myField)
+    }
+  }
+
+  @Test
+  fun readAndWritePojo() = runTest {
+    data class Pojo(
+      @get:PropertyName("foobar")
+      @set:PropertyName("foobar")
+      @get:ServerTimestamp
+      var myField: Timestamp?
+    ) {
+      constructor() : this(null)
+    }
+    val timestampFieldVerifier = TimestampFieldVerifier.ServerTimestampPopulated()
+    timestampFieldVerifier.before(this@ExampleInstrumentedTest)
+    val documentReference = randomDocument()
+    val propTestConfig = PropTestConfig(seed = rs.random.nextLong(), iterations = NUM_ITERATIONS)
+    checkAll(propTestConfig, Arb.firebase.timestamp()) { timestamp ->
+      val writtenPojo = Pojo()
+      documentReference.set(writtenPojo).await()
+
+      val snapshot = documentReference.get().await()
+      withClue("snapshot keys") { snapshot.data?.keys?.toSet() shouldBe setOf("foobar") }
+
+      val readPojo =
+        withClue("DocumentSnapshot.toObject()") {
+          snapshot
+            .toObject(Pojo::class.java, DocumentSnapshot.ServerTimestampBehavior.NONE)
+            .shouldNotBeNull()
+        }
+      val retrievedTimestamp = withClue("readPojo.myField") { readPojo.myField.shouldNotBeNull() }
+
+      withClue(
+        "verifying using: $timestampFieldVerifier " +
+          "(writtenTimestamp=${writtenPojo.myField} retrievedTimestamp=${readPojo.myField})"
+      ) {
+        timestampFieldVerifier.verify(
+          writtenTimestamp = writtenPojo.myField,
+          retrievedTimestamp = retrievedTimestamp,
+        )
+      }
     }
   }
 }
