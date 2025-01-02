@@ -54,7 +54,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
-class ExampleInstrumentedTest {
+class DemoAndroidTest {
 
   @get:Rule val firestoreDebugLoggingRule = FirestoreDebugLoggingRule()
   @get:Rule val randomSourceRule = RandomSourceRule()
@@ -149,7 +149,7 @@ class ExampleInstrumentedTest {
       constructor() : this(null)
     }
     val timestampFieldVerifier = TimestampFieldVerifier.ServerTimestampPopulated()
-    timestampFieldVerifier.before(this@ExampleInstrumentedTest)
+    timestampFieldVerifier.before(this@DemoAndroidTest)
     val documentReference = randomDocument()
     val propTestConfig = PropTestConfig(seed = rs.random.nextLong(), iterations = NUM_ITERATIONS)
     checkAll(propTestConfig, Arb.firebase.timestamp()) { timestamp ->
@@ -182,7 +182,7 @@ class ExampleInstrumentedTest {
 
 private sealed interface TimestampFieldVerifier {
 
-  suspend fun before(test: ExampleInstrumentedTest) {}
+  suspend fun before(test: DemoAndroidTest) {}
 
   fun verify(writtenTimestamp: Timestamp?, retrievedTimestamp: Timestamp)
 
@@ -200,7 +200,7 @@ private sealed interface TimestampFieldVerifier {
 
     private lateinit var beforeData: BeforeData
 
-    override suspend fun before(test: ExampleInstrumentedTest) {
+    override suspend fun before(test: DemoAndroidTest) {
       val timeNs = System.nanoTime()
       val serverTimestamp = test.getServerTimestamp()
       beforeData = BeforeData(timeNs, serverTimestamp)
@@ -227,7 +227,24 @@ private sealed interface TimestampFieldVerifier {
   }
 }
 
-private suspend fun <T : Any> ExampleInstrumentedTest.verifyRoundTrip(
+data class MyDocument(
+  @get:[PropertyName("my_foo") ServerTimestamp]
+  val myFoo: Timestamp?
+)
+
+data class MyDocument2(
+  @get:[PropertyName("my_foo") ServerTimestamp]
+  @set:PropertyName("my_foo")
+  var myFoo: Timestamp? = null
+) {
+  constructor() : this(null)
+}
+
+fun x() {
+  val xx = MyDocument2()
+}
+
+private suspend fun <T : Any> DemoAndroidTest.verifyRoundTrip(
   fieldName: String,
   timestampFieldVerifier: TimestampFieldVerifier,
   pojoFactory: (Timestamp) -> Pair<T, T.() -> Timestamp?>,
@@ -257,26 +274,26 @@ private suspend fun <T : Any> ExampleInstrumentedTest.verifyRoundTrip(
   }
 }
 
-private suspend fun ExampleInstrumentedTest.getServerTimestamp(): Timestamp {
+private suspend fun DemoAndroidTest.getServerTimestamp(): Timestamp {
   val documentReference = randomDocument()
   documentReference.set(mapOf("3kqqgwjh4d" to FieldValue.serverTimestamp())).await()
   val snapshot = documentReference.get().await()
   return snapshot.getTimestamp("3kqqgwjh4d")!!
 }
 
-private fun ExampleInstrumentedTest.randomCollection(): CollectionReference {
+private fun DemoAndroidTest.randomCollection(): CollectionReference {
   val name = "coll_" + randomString()
   return firestore.collection(name)
 }
 
-private fun ExampleInstrumentedTest.randomDocument(
+private fun DemoAndroidTest.randomDocument(
   collectionReference: CollectionReference = randomCollection()
 ): DocumentReference {
   val name = "doc_" + randomString()
   return collectionReference.document(name)
 }
 
-private fun ExampleInstrumentedTest.randomString(): String =
+private fun DemoAndroidTest.randomString(): String =
   Arb.visuallyDistinctAlphanumericString(size = 40).next(rs)
 
 private const val NUM_ITERATIONS = 20
