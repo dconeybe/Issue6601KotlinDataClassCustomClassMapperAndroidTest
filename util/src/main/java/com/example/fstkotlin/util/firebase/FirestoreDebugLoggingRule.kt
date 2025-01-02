@@ -31,6 +31,14 @@ class FirestoreDebugLoggingRule(
     LocalSettings.fromInstrumentation()
 ) : ExternalResource() {
 
+  constructor(
+    debugLoggingEnabled: Boolean
+  ) : this(
+    object : FirestoreDebugLoggingSetting {
+      override val firestoreDebugLogging = debugLoggingEnabled
+    }
+  )
+
   private lateinit var appliedDebugLogging: AppliedFirestoreDebugLogging
 
   override fun before() {
